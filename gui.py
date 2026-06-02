@@ -269,7 +269,7 @@ class AssignmentMarkerApp(tk.Tk):
             self._queue_log(f"Found {len(submissions)} student submission(s).")
 
             # Testing mode: only process the first student.
-            submissions_to_process = submissions[:1]
+            submissions_to_process = submissions
 
             for index, submission in enumerate(submissions_to_process, start=1):
                 if self.cancel_event.is_set():

@@ -6,29 +6,18 @@ client = OpenAI()
 
 
 def upload_file(file_path):
-    """
-    Uploads a file to OpenAI so it can be used as an input_file.
-    """
     file_path = Path(file_path)
 
-    uploaded_file = client.files.create(
-        file=open(file_path, "rb"),
-        purpose="user_data"
-    )
+    with open(file_path, "rb") as file:
+        uploaded_file = client.files.create(
+            file=file,
+            purpose="user_data"
+        )
 
     return uploaded_file.id
 
 
 def mark_student_submission(task_file_path, criteria_text, student_file_path, student_name):
-    """
-    Marks one student submission.
-
-    Uses:
-    - original task sheet file
-    - OCR/text extracted criteria sheet
-    - original student submission file
-    """
-
     task_file_id = upload_file(task_file_path)
     student_file_id = upload_file(student_file_path)
 
@@ -49,7 +38,19 @@ Important marking rules:
 - Do not invent evidence that is not in the student work.
 - If a graph, diagram, table, or calculation is missing or unclear, say so.
 - Feedback should be useful to the student and suitable for a teacher to give.
-- Return JSON only. No markdown. No extra explanation outside JSON.
+
+Grading scale:
+A = Excellent demonstration of the criterion.
+B = Strong demonstration of the criterion.
+C = Satisfactory demonstration of the criterion.
+D = Partial demonstration of the criterion.
+E = Minimal demonstration of the criterion.
+N = The criterion was not demonstrated or there is insufficient evidence to assess it.
+
+Use N whenever the student has not provided evidence for a criterion.
+Do not award E if no evidence exists. Use N instead.
+
+Return JSON only. No markdown. No explanation outside JSON.
 
 CRITERIA / RUBRIC TEXT:
 {criteria_text}
@@ -61,11 +62,11 @@ Return this exact JSON structure:
   "criteria_results": [
     {{
       "criterion": "Criterion name",
-      "grade": "A/B/C/D/E or Not Yet Demonstrated",
+      "grade": "A/B/C/D/E/N",
       "feedback": "Specific feedback for this criterion."
     }}
   ],
-  "overall_grade": "A/B/C/D/E",
+  "overall_grade": "A/B/C/D/E/N",
   "overall_feedback": "Overall feedback for the student."
 }}
 """
@@ -104,4 +105,5 @@ Return this exact JSON structure:
             "overall_grade": "ERROR",
             "overall_feedback": result_text,
         }
+    
     

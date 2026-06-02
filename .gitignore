@@ -14,3 +14,6 @@ config.py
 
 # Excel temp files
 ~$*.xlsx
+
+# VS Code settings
+.vscode/
