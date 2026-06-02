@@ -6,6 +6,8 @@ import queue
 
 from document_reader import read_document
 from ai_marker import mark_student_submission
+from feedback_writer import write_feedback_document
+from spreadsheet_writer import write_result_to_spreadsheet
 
 
 class AssignmentMarkerApp(tk.Tk):
@@ -291,7 +293,26 @@ class AssignmentMarkerApp(tk.Tk):
                 self._queue_log(f"Overall grade: {marking_result.get('overall_grade', 'No grade returned')}")
                 self._queue_log(f"Overall feedback: {marking_result.get('overall_feedback', 'No feedback returned')}")
 
+                feedback_path = write_feedback_document(
+                    marking_result,
+                    output_folder
+                )
+
+                self._queue_log(
+                    f"Feedback document saved: {feedback_path}"
+                )
+
+                spreadsheet_path = write_result_to_spreadsheet(
+                    marking_result,
+                    output_folder
+                )
+
+                self._queue_log(
+                    f"Spreadsheet updated: {spreadsheet_path}"
+                )
+
                 progress_value = int((index / len(submissions_to_process)) * 100)
+
                 self.message_queue.put(("progress", progress_value, f"Processed {index} of {len(submissions_to_process)} submissions"))
 
             if self.cancel_event.is_set():
@@ -348,4 +369,3 @@ if __name__ == "__main__":
     app = AssignmentMarkerApp()
     app.mainloop()
 
-    
