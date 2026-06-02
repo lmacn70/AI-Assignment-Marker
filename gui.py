@@ -5,8 +5,8 @@ import threading
 import queue
 
 from document_reader import read_document
-from ai_marker import mark_student_submission
-from feedback_writer import write_feedback_document
+from ai_marker import mark_student_submission, provide_draft_feedback
+from feedback_writer import write_feedback_document, write_draft_feedback_document
 from spreadsheet_writer import write_result_to_spreadsheet
 
 
@@ -22,6 +22,7 @@ class AssignmentMarkerApp(tk.Tk):
         self.task_sheet = tk.StringVar()
         self.criteria_sheet = tk.StringVar()
         self.output_folder = tk.StringVar()
+        self.marking_mode = tk.StringVar(value="Final Marking")
 
         self.supported_extensions = [".docx", ".pdf", ".txt"]
 
@@ -57,22 +58,32 @@ class AssignmentMarkerApp(tk.Tk):
         main_frame = ttk.Frame(self, padding=(20, 8, 20, 12))
         main_frame.grid(row=1, column=0, sticky="nsew")
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(6, weight=1)
+        main_frame.rowconfigure(7, weight=1)
 
         self._add_path_selector(main_frame, 0, "Student submissions folder", self.student_folder, self._select_student_folder)
         self._add_path_selector(main_frame, 1, "Assignment task sheet", self.task_sheet, self._select_task_sheet)
         self._add_path_selector(main_frame, 2, "Criteria marking sheet", self.criteria_sheet, self._select_criteria_sheet)
         self._add_path_selector(main_frame, 3, "Output folder", self.output_folder, self._select_output_folder)
 
+        ttk.Label(main_frame, text="Mode").grid(row=4, column=0, sticky="w", pady=6)
+
+        self.mode_combo = ttk.Combobox(
+            main_frame,
+            textvariable=self.marking_mode,
+            values=["Final Marking", "Draft Feedback"],
+            state="readonly",
+        )
+        self.mode_combo.grid(row=4, column=1, sticky="w", padx=(12, 8), pady=6)
+
         self.file_count_label = ttk.Label(
             main_frame,
             text="No student submission folder selected.",
             font=("Arial", 10, "italic"),
         )
-        self.file_count_label.grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self.file_count_label.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(16, 8))
+        button_frame.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(16, 8))
         button_frame.columnconfigure(0, weight=1)
 
         self.clear_button = ttk.Button(button_frame, text="Clear Selections", command=self._clear_selections)
@@ -85,7 +96,7 @@ class AssignmentMarkerApp(tk.Tk):
         self.run_button.grid(row=0, column=2, sticky="e")
 
         log_frame = ttk.LabelFrame(main_frame, text="Status", padding=(10, 8))
-        log_frame.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
+        log_frame.grid(row=7, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
@@ -260,7 +271,10 @@ class AssignmentMarkerApp(tk.Tk):
                 self.message_queue.put(("error", "No supported student submissions were found."))
                 return
 
+            mode = self.marking_mode.get()
+
             self._queue_log("Starting marking process...")
+            self._queue_log(f"Mode selected: {mode}")
 
             self._queue_log("Reading criteria sheet...")
             criteria_text = read_document(criteria_sheet)
@@ -268,7 +282,6 @@ class AssignmentMarkerApp(tk.Tk):
 
             self._queue_log(f"Found {len(submissions)} student submission(s).")
 
-            # Testing mode: only process the first student.
             submissions_to_process = submissions
 
             for index, submission in enumerate(submissions_to_process, start=1):
@@ -280,45 +293,60 @@ class AssignmentMarkerApp(tk.Tk):
 
                 student_name = submission.stem
 
-                self._queue_log(f"Sending {student_name} to AI marker...")
+                self._queue_log(f"Sending {student_name} to AI in {mode} mode...")
 
-                marking_result = mark_student_submission(
-                    task_file_path=task_sheet,
-                    criteria_text=criteria_text,
-                    student_file_path=submission,
-                    student_name=student_name,
-                )
+                if mode == "Draft Feedback":
+                    feedback_result = provide_draft_feedback(
+                        task_file_path=task_sheet,
+                        criteria_text=criteria_text,
+                        student_file_path=submission,
+                        student_name=student_name,
+                    )
 
-                self._queue_log(f"AI marking complete for {student_name}")
-                self._queue_log(f"Overall grade: {marking_result.get('overall_grade', 'No grade returned')}")
-                self._queue_log(f"Overall feedback: {marking_result.get('overall_feedback', 'No feedback returned')}")
+                    self._queue_log(f"Draft feedback complete for {student_name}")
 
-                feedback_path = write_feedback_document(
-                    marking_result,
-                    output_folder
-                )
+                    feedback_path = write_draft_feedback_document(
+                        feedback_result,
+                        output_folder
+                    )
 
-                self._queue_log(
-                    f"Feedback document saved: {feedback_path}"
-                )
+                    self._queue_log(f"Draft feedback document saved: {feedback_path}")
 
-                spreadsheet_path = write_result_to_spreadsheet(
-                    marking_result,
-                    output_folder
-                )
+                else:
+                    marking_result = mark_student_submission(
+                        task_file_path=task_sheet,
+                        criteria_text=criteria_text,
+                        student_file_path=submission,
+                        student_name=student_name,
+                    )
 
-                self._queue_log(
-                    f"Spreadsheet updated: {spreadsheet_path}"
-                )
+                    self._queue_log(f"AI marking complete for {student_name}")
+                    self._queue_log(f"Overall grade: {marking_result.get('overall_grade', 'No grade returned')}")
+                    self._queue_log(f"Overall feedback: {marking_result.get('overall_feedback', 'No feedback returned')}")
+
+                    feedback_path = write_feedback_document(
+                        marking_result,
+                        output_folder
+                    )
+
+                    self._queue_log(f"Feedback document saved: {feedback_path}")
+
+                    spreadsheet_path = write_result_to_spreadsheet(
+                        marking_result,
+                        output_folder
+                    )
+
+                    self._queue_log(f"Spreadsheet updated: {spreadsheet_path}")
 
                 progress_value = int((index / len(submissions_to_process)) * 100)
-
-                self.message_queue.put(("progress", progress_value, f"Processed {index} of {len(submissions_to_process)} submissions"))
+                self.message_queue.put(
+                    ("progress", progress_value, f"Processed {index} of {len(submissions_to_process)} submissions")
+                )
 
             if self.cancel_event.is_set():
                 self._queue_log("Marking cancelled.")
             else:
-                self._queue_log("AI marking test complete.")
+                self._queue_log("Processing complete.")
 
         except Exception as error:
             self.message_queue.put(("error", str(error)))
@@ -369,3 +397,4 @@ if __name__ == "__main__":
     app = AssignmentMarkerApp()
     app.mainloop()
 
+    

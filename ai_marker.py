@@ -105,5 +105,81 @@ Return this exact JSON structure:
             "overall_grade": "ERROR",
             "overall_feedback": result_text,
         }
+
+
+def provide_draft_feedback(task_file_path, criteria_text, student_file_path, student_name):
+    task_file_id = upload_file(task_file_path)
+    student_file_id = upload_file(student_file_path)
+
+    feedback_instructions = f"""
+You are an experienced Queensland mathematics teacher.
+
+You are reviewing a draft student assignment.
+
+Use:
+1. The original assignment task sheet file.
+2. The criteria/rubric text below.
+3. The original student submission file.
+
+This is DRAFT FEEDBACK MODE.
+
+Important rules:
+- Do not give a grade.
+- Do not estimate an overall grade.
+- Do not say what grade the student might get.
+- Give formative feedback only.
+- For each criterion, explain:
+  1. what the student has already done well
+  2. what the student still needs to do
+- Be specific, practical, and student-friendly.
+- Consider evidence from text, calculations, tables, diagrams, graphs, images, and layout.
+- Do not invent evidence.
+
+Return JSON only. No markdown.
+
+CRITERIA / RUBRIC TEXT:
+{criteria_text}
+
+Return this exact JSON structure:
+
+{{
+  "student_name": "{student_name}",
+  "mode": "draft_feedback",
+  "criteria_feedback": [
+    {{
+      "criterion": "Criterion name",
+      "done_well": "What the student has already done well for this criterion.",
+      "needs_to_do": "What the student still needs to do for this criterion."
+    }}
+  ],
+  "overall_feedback": "Overall draft feedback with clear next steps."
+}}
+"""
+
+    response = client.responses.create(
+        model="gpt-5.5",
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_file", "file_id": task_file_id},
+                    {"type": "input_file", "file_id": student_file_id},
+                    {"type": "input_text", "text": feedback_instructions},
+                ],
+            }
+        ],
+    )
+
+    result_text = response.output_text.strip()
+
+    try:
+        return json.loads(result_text)
+    except json.JSONDecodeError:
+        return {
+            "student_name": student_name,
+            "mode": "draft_feedback",
+            "criteria_feedback": [],
+            "overall_feedback": result_text,
+        }
     
     
