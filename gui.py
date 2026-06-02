@@ -1,9 +1,10 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
+import threading
+import queue
 
 from document_reader import read_document
-
 from ai_marker import mark_student_submission
 
 
@@ -22,8 +23,14 @@ class AssignmentMarkerApp(tk.Tk):
 
         self.supported_extensions = [".docx", ".pdf", ".txt"]
 
+        self.message_queue = queue.Queue()
+        self.cancel_event = threading.Event()
+        self.worker_thread = None
+        self.is_marking = False
+
         self._build_layout()
         self._update_run_button_state()
+        self.after(200, self._process_queue)
 
     def _build_layout(self):
         self.columnconfigure(0, weight=1)
@@ -50,37 +57,10 @@ class AssignmentMarkerApp(tk.Tk):
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(6, weight=1)
 
-        self._add_path_selector(
-            main_frame,
-            0,
-            "Student submissions folder",
-            self.student_folder,
-            self._select_student_folder,
-        )
-
-        self._add_path_selector(
-            main_frame,
-            1,
-            "Assignment task sheet",
-            self.task_sheet,
-            self._select_task_sheet,
-        )
-
-        self._add_path_selector(
-            main_frame,
-            2,
-            "Criteria marking sheet",
-            self.criteria_sheet,
-            self._select_criteria_sheet,
-        )
-
-        self._add_path_selector(
-            main_frame,
-            3,
-            "Output folder",
-            self.output_folder,
-            self._select_output_folder,
-        )
+        self._add_path_selector(main_frame, 0, "Student submissions folder", self.student_folder, self._select_student_folder)
+        self._add_path_selector(main_frame, 1, "Assignment task sheet", self.task_sheet, self._select_task_sheet)
+        self._add_path_selector(main_frame, 2, "Criteria marking sheet", self.criteria_sheet, self._select_criteria_sheet)
+        self._add_path_selector(main_frame, 3, "Output folder", self.output_folder, self._select_output_folder)
 
         self.file_count_label = ttk.Label(
             main_frame,
@@ -93,19 +73,14 @@ class AssignmentMarkerApp(tk.Tk):
         button_frame.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(16, 8))
         button_frame.columnconfigure(0, weight=1)
 
-        self.clear_button = ttk.Button(
-            button_frame,
-            text="Clear Selections",
-            command=self._clear_selections,
-        )
+        self.clear_button = ttk.Button(button_frame, text="Clear Selections", command=self._clear_selections)
         self.clear_button.grid(row=0, column=0, sticky="w")
 
-        self.run_button = ttk.Button(
-            button_frame,
-            text="Run Marking",
-            command=self._run_marking,
-        )
-        self.run_button.grid(row=0, column=1, sticky="e")
+        self.cancel_button = ttk.Button(button_frame, text="Cancel", command=self._cancel_marking, state="disabled")
+        self.cancel_button.grid(row=0, column=1, padx=(0, 8), sticky="e")
+
+        self.run_button = ttk.Button(button_frame, text="Run Marking", command=self._start_marking_thread)
+        self.run_button.grid(row=0, column=2, sticky="e")
 
         log_frame = ttk.LabelFrame(main_frame, text="Status", padding=(10, 8))
         log_frame.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
@@ -140,22 +115,14 @@ class AssignmentMarkerApp(tk.Tk):
     def _add_path_selector(self, parent, row, label, variable, command):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=6)
 
-        ttk.Entry(
-            parent,
-            textvariable=variable,
-            state="readonly",
-        ).grid(row=row, column=1, sticky="ew", padx=(12, 8), pady=6)
-
-        ttk.Button(parent, text="Browse", command=command).grid(
-            row=row,
-            column=2,
-            sticky="e",
-            pady=6,
+        ttk.Entry(parent, textvariable=variable, state="readonly").grid(
+            row=row, column=1, sticky="ew", padx=(12, 8), pady=6
         )
+
+        ttk.Button(parent, text="Browse", command=command).grid(row=row, column=2, sticky="e", pady=6)
 
     def _select_student_folder(self):
         folder = filedialog.askdirectory(title="Select student submissions folder")
-
         if folder:
             self.student_folder.set(folder)
             self._log(f"Student submissions folder selected: {folder}")
@@ -173,7 +140,6 @@ class AssignmentMarkerApp(tk.Tk):
                 ("All files", "*.*"),
             ],
         )
-
         if file_path:
             self.task_sheet.set(file_path)
             self._log(f"Task sheet selected: {file_path}")
@@ -190,7 +156,6 @@ class AssignmentMarkerApp(tk.Tk):
                 ("All files", "*.*"),
             ],
         )
-
         if file_path:
             self.criteria_sheet.set(file_path)
             self._log(f"Criteria sheet selected: {file_path}")
@@ -198,45 +163,40 @@ class AssignmentMarkerApp(tk.Tk):
 
     def _select_output_folder(self):
         folder = filedialog.askdirectory(title="Select output folder")
-
         if folder:
             self.output_folder.set(folder)
             self._log(f"Output folder selected: {folder}")
             self._update_run_button_state()
 
     def _clear_selections(self):
+        if self.is_marking:
+            messagebox.showwarning("Marking running", "Cancel marking before clearing selections.")
+            return
+
         self.student_folder.set("")
         self.task_sheet.set("")
         self.criteria_sheet.set("")
         self.output_folder.set("")
-
         self.file_count_label.configure(text="No student submission folder selected.")
         self.progress["value"] = 0
         self.progress_label.configure(text="Ready")
-
         self._log("Selections cleared.")
         self._update_run_button_state()
 
+    def _get_supported_submission_files(self, folder):
+        files = []
+        for extension in self.supported_extensions:
+            files.extend(folder.glob(f"*{extension}"))
+        return sorted(files)
+
     def _update_submission_count(self):
         folder = Path(self.student_folder.get())
-
         if not folder.exists():
             self.file_count_label.configure(text="Student submissions folder does not exist.")
             return
 
         submissions = self._get_supported_submission_files(folder)
-
-        self.file_count_label.configure(
-            text=f"{len(submissions)} supported student submission file(s) found."
-        )
-
-    def _get_supported_submission_files(self, folder):
-        files = []
-
-        for extension in self.supported_extensions:
-            files.extend(folder.glob(f"*{extension}"))
-
-        return sorted(files)
+        self.file_count_label.configure(text=f"{len(submissions)} supported student submission file(s) found.")
 
     def _update_run_button_state(self):
         required_paths = [
@@ -246,108 +206,136 @@ class AssignmentMarkerApp(tk.Tk):
             self.output_folder.get(),
         ]
 
-        if all(required_paths):
+        if all(required_paths) and not self.is_marking:
             self.run_button.configure(state="normal")
         else:
             self.run_button.configure(state="disabled")
 
-    def _run_marking(self):
-        student_folder = Path(self.student_folder.get())
-        task_sheet = Path(self.task_sheet.get())
-        criteria_sheet = Path(self.criteria_sheet.get())
-        output_folder = Path(self.output_folder.get())
-
-        if not student_folder.exists():
-            messagebox.showerror("Missing folder", "The student submissions folder does not exist.")
+    def _start_marking_thread(self):
+        if self.is_marking:
             return
 
-        if not task_sheet.exists():
-            messagebox.showerror("Missing file", "The assignment task sheet does not exist.")
-            return
+        self.cancel_event.clear()
+        self.is_marking = True
 
-        if not criteria_sheet.exists():
-            messagebox.showerror("Missing file", "The criteria marking sheet does not exist.")
-            return
+        self.run_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
+        self.clear_button.configure(state="disabled")
 
-        if not output_folder.exists():
-            messagebox.showerror("Missing folder", "The output folder does not exist.")
-            return
+        self.worker_thread = threading.Thread(target=self._run_marking_worker, daemon=True)
+        self.worker_thread.start()
 
-        submissions = self._get_supported_submission_files(student_folder)
+    def _cancel_marking(self):
+        self.cancel_event.set()
+        self._queue_log("Cancel requested. Waiting for the current AI call to finish...")
 
-        if not submissions:
-            messagebox.showwarning(
-                "No submissions found",
-                "No supported student submissions were found. Use .docx, .pdf, or .txt files.",
-            )
-            self._log("No supported student submission files found.")
-            return
-
+    def _run_marking_worker(self):
         try:
-            self._log("Starting marking process...")
+            student_folder = Path(self.student_folder.get())
+            task_sheet = Path(self.task_sheet.get())
+            criteria_sheet = Path(self.criteria_sheet.get())
+            output_folder = Path(self.output_folder.get())
 
-            self._log("Reading task sheet...")
-            task_text = read_document(task_sheet)
-            self._log(f"Task sheet read successfully: {len(task_text)} characters")
+            if not student_folder.exists():
+                self.message_queue.put(("error", "The student submissions folder does not exist."))
+                return
 
-            self._log("Reading criteria sheet...")
+            if not task_sheet.exists():
+                self.message_queue.put(("error", "The assignment task sheet does not exist."))
+                return
+
+            if not criteria_sheet.exists():
+                self.message_queue.put(("error", "The criteria marking sheet does not exist."))
+                return
+
+            if not output_folder.exists():
+                self.message_queue.put(("error", "The output folder does not exist."))
+                return
+
+            submissions = self._get_supported_submission_files(student_folder)
+
+            if not submissions:
+                self.message_queue.put(("error", "No supported student submissions were found."))
+                return
+
+            self._queue_log("Starting marking process...")
+
+            self._queue_log("Reading criteria sheet...")
             criteria_text = read_document(criteria_sheet)
-            self._log(f"Criteria sheet read successfully: {len(criteria_text)} characters")
+            self._queue_log(f"Criteria sheet read successfully: {len(criteria_text)} characters")
 
-            self._log(f"Found {len(submissions)} student submission(s).")
-            self.progress["value"] = 0
-            self.progress_label.configure(text="Reading submissions...")
+            self._queue_log(f"Found {len(submissions)} student submission(s).")
 
-            for index, submission in enumerate(submissions[:1], start=1):
+            # Testing mode: only process the first student.
+            submissions_to_process = submissions[:1]
 
-                self._log(f"Processing {index}/{len(submissions)}: {submission.name}")
+            for index, submission in enumerate(submissions_to_process, start=1):
+                if self.cancel_event.is_set():
+                    self._queue_log("Marking cancelled before next student.")
+                    break
 
-                student_text = read_document(submission)
-
-                self._log(f"Read {submission.name}: {len(student_text)} characters")
+                self._queue_log(f"Processing {index}/{len(submissions_to_process)}: {submission.name}")
 
                 student_name = submission.stem
 
-                self._log(f"Sending {student_name} to AI marker...")
+                self._queue_log(f"Sending {student_name} to AI marker...")
 
                 marking_result = mark_student_submission(
-                    task_text=task_text,
+                    task_file_path=task_sheet,
                     criteria_text=criteria_text,
-                    student_text=student_text,
-                    student_name=student_name
+                    student_file_path=submission,
+                    student_name=student_name,
                 )
 
-                self._log(f"AI marking complete for {student_name}")
+                self._queue_log(f"AI marking complete for {student_name}")
+                self._queue_log(f"Overall grade: {marking_result.get('overall_grade', 'No grade returned')}")
+                self._queue_log(f"Overall feedback: {marking_result.get('overall_feedback', 'No feedback returned')}")
 
-                self._log(
-                    f"Overall grade: {marking_result.get('overall_grade', 'No grade returned')}"
-                )
+                progress_value = int((index / len(submissions_to_process)) * 100)
+                self.message_queue.put(("progress", progress_value, f"Processed {index} of {len(submissions_to_process)} submissions"))
 
-                self._log(
-                    f"Overall feedback: {marking_result.get('overall_feedback', 'No feedback returned')}"
-                )
-
-                progress_value = int((index / len(submissions)) * 100)
-
-                self.progress["value"] = progress_value
-
-                self.progress_label.configure(
-                    text=f"Processed {index} of {len(submissions)} submissions"
-                )
-
-                self.update_idletasks()
-
-            self._log("AI marking test complete.")
-            self.progress_label.configure(text="Complete")
-
-            messagebox.showinfo(
-                "Complete",
-                "The document reading test has finished successfully.",
-            )
+            if self.cancel_event.is_set():
+                self._queue_log("Marking cancelled.")
+            else:
+                self._queue_log("AI marking test complete.")
 
         except Exception as error:
-            self._log(f"ERROR: {error}")
-            messagebox.showerror("Error", str(error))
+            self.message_queue.put(("error", str(error)))
+
+        finally:
+            self.message_queue.put(("finished",))
+
+    def _queue_log(self, message):
+        self.message_queue.put(("log", message))
+
+    def _process_queue(self):
+        try:
+            while True:
+                message = self.message_queue.get_nowait()
+
+                if message[0] == "log":
+                    self._log(message[1])
+
+                elif message[0] == "progress":
+                    _, value, label = message
+                    self.progress["value"] = value
+                    self.progress_label.configure(text=label)
+
+                elif message[0] == "error":
+                    self._log(f"ERROR: {message[1]}")
+                    messagebox.showerror("Error", message[1])
+
+                elif message[0] == "finished":
+                    self.is_marking = False
+                    self.cancel_button.configure(state="disabled")
+                    self.clear_button.configure(state="normal")
+                    self.progress_label.configure(text="Complete")
+                    self._update_run_button_state()
+
+        except queue.Empty:
+            pass
+
+        self.after(200, self._process_queue)
 
     def _log(self, message):
         self.status_text.configure(state="normal")

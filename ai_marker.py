@@ -1,18 +1,60 @@
 import json
+from pathlib import Path
 from openai import OpenAI
 
 client = OpenAI()
 
 
-def mark_student_submission(task_text, criteria_text, student_text, student_name):
-    prompt = f"""
+def upload_file(file_path):
+    """
+    Uploads a file to OpenAI so it can be used as an input_file.
+    """
+    file_path = Path(file_path)
+
+    uploaded_file = client.files.create(
+        file=open(file_path, "rb"),
+        purpose="user_data"
+    )
+
+    return uploaded_file.id
+
+
+def mark_student_submission(task_file_path, criteria_text, student_file_path, student_name):
+    """
+    Marks one student submission.
+
+    Uses:
+    - original task sheet file
+    - OCR/text extracted criteria sheet
+    - original student submission file
+    """
+
+    task_file_id = upload_file(task_file_path)
+    student_file_id = upload_file(student_file_path)
+
+    marking_instructions = f"""
 You are an experienced Queensland mathematics teacher.
 
-Mark the student's assignment using the task sheet and criteria sheet.
+You are marking a student assignment.
 
-Return JSON only. No markdown. No explanation outside JSON.
+Use:
+1. The original assignment task sheet file.
+2. The criteria/rubric text below.
+3. The original student submission file.
 
-Use this structure:
+Important marking rules:
+- Use the criteria sheet as the main basis for awarding grades.
+- Consider evidence from text, calculations, tables, diagrams, graphs, images, and layout in the student submission.
+- Be fair, specific, and evidence-based.
+- Do not invent evidence that is not in the student work.
+- If a graph, diagram, table, or calculation is missing or unclear, say so.
+- Feedback should be useful to the student and suitable for a teacher to give.
+- Return JSON only. No markdown. No extra explanation outside JSON.
+
+CRITERIA / RUBRIC TEXT:
+{criteria_text}
+
+Return this exact JSON structure:
 
 {{
   "student_name": "{student_name}",
@@ -20,26 +62,35 @@ Use this structure:
     {{
       "criterion": "Criterion name",
       "grade": "A/B/C/D/E or Not Yet Demonstrated",
-      "feedback": "Specific feedback explaining what was demonstrated and what needs improvement."
+      "feedback": "Specific feedback for this criterion."
     }}
   ],
   "overall_grade": "A/B/C/D/E",
-  "overall_feedback": "Clear overall feedback for the student."
+  "overall_feedback": "Overall feedback for the student."
 }}
-
-TASK SHEET:
-{task_text}
-
-CRITERIA SHEET:
-{criteria_text}
-
-STUDENT SUBMISSION:
-{student_text}
 """
 
     response = client.responses.create(
         model="gpt-5.5",
-        input=prompt,
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_file",
+                        "file_id": task_file_id,
+                    },
+                    {
+                        "type": "input_file",
+                        "file_id": student_file_id,
+                    },
+                    {
+                        "type": "input_text",
+                        "text": marking_instructions,
+                    },
+                ],
+            }
+        ],
     )
 
     result_text = response.output_text.strip()
@@ -53,3 +104,4 @@ STUDENT SUBMISSION:
             "overall_grade": "ERROR",
             "overall_feedback": result_text,
         }
+    
