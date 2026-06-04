@@ -112,7 +112,7 @@ def provide_draft_feedback(task_file_path, criteria_text, student_file_path, stu
     student_file_id = upload_file(student_file_path)
 
     feedback_instructions = f"""
-You are an experienced Queensland mathematics teacher.
+You are an experienced Queensland secondary teacher in the particular subject area.
 
 You are reviewing a draft student assignment.
 
@@ -182,4 +182,4 @@ Return this exact JSON structure:
             "overall_feedback": result_text,
         }
     
-    
+
